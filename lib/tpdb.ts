@@ -340,6 +340,64 @@ export async function findMatches(
   return [...seen.values()].sort((a, b) => b.score - a.score);
 }
 
+// The release date a file name carries: "2026-09-13" as Whisparr and this
+// library write it, or "26.09.13" as a scene release does. Null when there is
+// none, and for anything that is not a real calendar date.
+export function releaseDate(name: string): string | null {
+  const long = /(?:^|\D)((?:19|20)\d{2})[-.](\d{2})[-.](\d{2})(?!\d)/.exec(name);
+  const short = long
+    ? null
+    : /(?:^|[.\s_-])(\d{2})\.(\d{2})\.(\d{2})(?=[.\s_-]|$)/.exec(name);
+  const m = long ?? short;
+  if (!m) return null;
+  const year = long ? m[1] : `20${m[1]}`;
+  const date = `${year}-${m[2]}-${m[3]}`;
+  const parsed = new Date(`${date}T00:00:00Z`);
+  return !Number.isNaN(parsed.getTime()) &&
+    parsed.toISOString().slice(0, 10) === date
+    ? date
+    : null;
+}
+
+// Scene lookup by file name. TPDB's `parse` reads site, date and performers out
+// of a name like "PervMom.26.09.13.Alex.Harper" or "Perv Mom - 2026-09-13 -
+// Alex Harper" — names the title search cannot find, because they carry no
+// scene title. Without a date it guesses wildly, so only dated names are sent,
+// and only a hit on that same date comes back.
+export async function findParseMatches(
+  fileName: string,
+  fileDuration: number | null
+): Promise<ScoredResult[]> {
+  const date = releaseDate(fileName);
+  if (!date) return [];
+  const data = await get("/scenes", { parse: fileName, per_page: "5" });
+  return (
+    (data?.data || [])
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .map((item: any) => normalizeItem(item, "scene"))
+      .filter((r: TpdbResult) => r.date?.slice(0, 10) === date)
+      .map((r: TpdbResult) => {
+        // Site and date already agree, so the title is not in question; only
+        // the runtime is left to separate this scene from a same-day sibling.
+        const scored = scoreResult(r, r.title, fileDuration);
+        return { ...scored, titleScore: 1 };
+      })
+  );
+}
+
+// A parse hit is safe to apply when its runtime agrees within 2%, or when there
+// is no runtime to check and it is the only scene on that site and date.
+export function isConfidentParse(
+  match: ScoredResult,
+  fileDuration: number | null,
+  hits: number
+): boolean {
+  if (match.durationDelta !== null && fileDuration) {
+    return match.durationDelta / fileDuration <= 0.02;
+  }
+  return hits === 1;
+}
+
 // Good enough to apply without a human looking at it. Deliberately strict: a
 // wrong auto-match silently mislabels a film, and the manual picker is one
 // click away.

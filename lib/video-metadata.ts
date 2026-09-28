@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import sharp from "sharp";
 import { db } from "./db";
 import type { VideoRow } from "./db";
@@ -13,12 +14,15 @@ import {
 } from "./video-performers";
 import {
   findMatches,
+  findParseMatches,
   getTpdb,
   getTpdbByRef,
   isConfident,
+  isConfidentParse,
   parseTpdbRef,
   scoreResult,
   tpdbConfigured,
+  type ScoredResult,
   type TpdbResult,
   type TpdbType,
 } from "./tpdb";
@@ -324,12 +328,46 @@ export async function candidatesFor(
     return [];
   }
 
-  const tpdb = tpdbConfigured() ? await findMatches(title, row.duration) : [];
+  // A dated scene release is found by its name, not its title: try that first,
+  // on the retyped query when there is one, otherwise on the file name itself
+  // (row.title has the date separators stripped).
+  let parsed: ScoredResult[] = [];
+  if (tpdbConfigured()) {
+    const fileName = query || path.basename(row.storage_key, path.extname(row.storage_key));
+    try {
+      parsed = await findParseMatches(fileName, row.duration);
+    } catch {
+      /* the title search below still runs */
+    }
+    const confident = parsed.filter((r) =>
+      isConfidentParse(r, row.duration, parsed.length)
+    );
+    if (confident.length) {
+      return confident
+        .sort((a, b) => b.score - a.score)
+        .map((r) => ({
+          ...fromTpdb(r),
+          score: r.score,
+          durationDelta: r.durationDelta,
+          confident: true,
+        }));
+    }
+  }
+
+  // A same-site, same-day scene whose runtime is off (a remaster, a cut) is
+  // still the likeliest answer, so it leads the picker, unconfirmed.
+  const found = tpdbConfigured() ? await findMatches(title, row.duration) : [];
+  const tpdb = [
+    ...parsed,
+    ...found.filter((r) => !parsed.some((p) => p.id === r.id)),
+  ];
   const scored: ScoredCandidate[] = tpdb.map((r) => ({
     ...fromTpdb(r),
     score: r.score,
     durationDelta: r.durationDelta,
-    confident: isConfident(r),
+    // A parse hit here already failed isConfidentParse; its forced titleScore
+    // would otherwise pass isConfident and auto-apply it anyway.
+    confident: parsed.includes(r) ? false : isConfident(r),
   }));
   // Only when that database has nothing: an adult film it does not know is
   // usually a cinema release, and those live in TheMovieDB.
