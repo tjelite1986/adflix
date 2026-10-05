@@ -55,6 +55,9 @@ for (const job of before) {
 // otherwise leave two colliding jobs one second apart and look already spread.
 
 const db = new Database(DB_PATH);
+// The app and the jobs runner hold the same file open; wait for their locks
+// instead of failing with SQLITE_BUSY, matching lib/db.ts.
+db.pragma("busy_timeout = 30000");
 const rows = db
   .prepare(
     "SELECT id, interval_seconds, next_run_at, CAST(strftime('%s', next_run_at) AS INTEGER) AS next_epoch" +
