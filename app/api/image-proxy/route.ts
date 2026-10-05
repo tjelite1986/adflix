@@ -168,8 +168,10 @@ export async function GET(req: NextRequest) {
       );
     }
   }
-  // Pin to the first validated address so the socket can't be rebound.
-  const pinned = resolved[0];
+  // Pin to a validated address so the socket can't be rebound. Prefer IPv4:
+  // the container network has no IPv6 route, so an AAAA-first answer would
+  // fail with ENETUNREACH although the host is reachable over IPv4.
+  const pinned = resolved.find((r) => r.family === 4) ?? resolved[0];
 
   let result: { status: number; contentType: string; body: Buffer };
   try {
