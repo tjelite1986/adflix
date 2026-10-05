@@ -144,6 +144,11 @@ export async function GET(req: NextRequest) {
   if (!ALLOWED_PROTOCOLS.has(target.protocol)) {
     return NextResponse.json({ error: "Unsupported protocol" }, { status: 400 });
   }
+  // Standard web ports only: image hosts never need others, and an arbitrary
+  // port turns the proxy into a scanner for services on public addresses.
+  if (target.port !== "" && target.port !== "80" && target.port !== "443") {
+    return NextResponse.json({ error: "Unsupported port" }, { status: 400 });
+  }
 
   // Resolve and reject if ANY resolved address is private/reserved.
   let resolved: { address: string; family: number }[];
